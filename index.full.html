@@ -1,0 +1,320 @@
+<script>
+/* m
+        A B C D E F G H I J K L M N O P Q R S T U V W X Y Z $ _
+upper | * * *   * *   *     * * * * * * * * * * * * * * * * * *
+lower | * * *   * *   * * * * *           * *   * * * * * *
+*/
+S = 8, // scale
+C = 8, // cell size - 8x8
+W = 80, H = 48, // field-size [width x height]
+w = W - 1, h = H - 1, // limit offset of field-size
+X = 7, Y = 1, // users coords [X,Y]
+V = 2, // users view vector: 0,1,2,3 - left,up,right,down
+
+_ = [], // px-cache [x => [y => "R,G,B", .., yN => ..], .., xN => ..], _[x][y] => "R,G,B"
+
+R = // bool "is rendering"
+M = // bool "user now moves"
+U = u = // prev (U) and current (u) user px.data
+i = j = x = y = // counter
+v = // view-vector
+s = // mini-sum
+P = // profit (sum of free-square)
+$ = // canvas 2D-context
+e = // one enemy
+T = 0, // render timer
+
+// colors rgb(R,G,B)
+B = "0,0,0",     // background
+F = "0,168,168", // free
+K = "168,0,168", // track
+N = "168,0,0",   // enemy
+
+// enemies
+E = [
+    {x: 8, y: 9, v: 0}, // v(view): 0-up+right, 1-bot+right, 2-bot+left, 3-up+left
+    {x: 9, y: 8, v: 2}
+]
+;
+
+onkeyup = function(e){
+    // new view, 37(left) -> 0, 38(up) -> 1, 39(right) -> 2, 40(down) -> 3
+    V = e.which % 37 % 4;
+
+    if (
+        // user doesn't move ..
+        !M &&
+        // .. but can go
+        (
+                !V && X     || // tries move to left (V = 0) AND can do it (X > 0)
+            V == 1 && Y     || // tries move to up           AND can do it (Y > 0)
+            V == 2 && X < w || // tries move to right        AND can do it
+            V >  2 && Y < h    // tries move to down (V = 3) AND can do it
+        )
+    ) {
+        M++;
+    }
+
+    if (!T) {
+        if (!$) {
+            $ = z.getContext("2d");
+
+            // init (mian border + background)
+            rgb(F);
+            $.fillRect(0, 0, W*S, H*S);
+            rgb(B);
+            $.fillRect(16, 16, 608, 352); // eq.: (2*S, 2*S, (W - (2+2))*S, (H - (2+2))*S)
+
+            U = $.getImageData(X*S, Y*S, C, C);
+
+            for (x = W; x--;) {
+                _[x] = [];
+                for (y = H; y--;) {
+                    _[x][y] = x > 1 && x < W - 2 && y > 1 && y < H - 2 ? B : F;
+                }
+            }
+        }
+        T = setInterval(function(){
+            if (!R++) {
+                if (M) {
+                    $.putImageData(U, X*S, Y*S);
+                    if (Q(U, B)) {
+                        L(X, Y, K);
+                    }
+
+                        !V &&     X && X--; // V = 0 AND X > 0     THEN move left
+                    V == 1 &&     Y && Y--; // V = 1 AND Y > 0     THEN move up
+                    V == 2 && X < w && X++; // V = 2 AND X < W - 1 THEN move right
+                    V >  2 && Y < h && Y++; // V = 3 AND Y < H - 1 THEN move down
+
+                    u = $.getImageData(X*S, Y*S, C, C);
+                    if (Q(u, K)) {
+                        return stop();
+                    }
+                    if (Q(U, B) && Q(u, F)) {
+                        M = 0;
+                        fill();
+                    }
+                    U = u;
+                }
+
+                for (e, i = E.length; i--;) {
+                    e = E[i];
+
+                    /**
+                     *  .---.---.---.
+                     *  | 7 | 0 | 1 |
+                     *  .---.---.---.
+                     *  | 6 | U | 2 |
+                     *  .---.---.---.
+                     *  | 5 | 4 | 3 |
+                     *  .---.---.---.
+                     */
+                    x = e.x, y = e.y, v = e.v;
+                    Z = [
+                        y              ? [    x, y - 1] : 0, // 0: up
+                        x < w && y     ? [x + 1, y - 1] : 0, // 1: up+right
+                        x < w          ? [x + 1,     y] : 0, // 2: right
+                        x < w && y < h ? [x + 1, y + 1] : 0, // 3: bot+right
+                        y < h          ? [    x, y + 1] : 0, // 4: bot
+                        x     && y < h ? [x - 1, y + 1] : 0, // 5: bot+left
+                        x              ? [x - 1,     y] : 0, // 6: left
+                        x     && y     ? [x - 1, y - 1] : 0, // 7: up+left
+                    ];
+
+                    /**
+                     *      v = 0           v = 1           v = 2           v = 3
+                     *  .---.---.---v   .---.---.---.   .---.---.---.   v---.---.---.
+                     *  |   | l | f |   |   |   |   |   |   |   |   |   | f | r |   |
+                     *  .---.---.---.   .---.---.---.   .---.---.---.   .---.---.---.
+                     *  |   | U | r |   |   | U | l |   | r | U |   |   | l | U |   |
+                     *  .---.---.---.   .---.---.---.   .---.---.---.   .---.---.---.
+                     *  |   |   |   |   |   | r | f |   | f | l |   |   |   |   |   |
+                     *  .---.---.---.   .---.---.---v   v---.---.---.   .---.---.---.
+                     *   l=0,f=1,r=2     l=2,f=3,r=4     l=4,f=5,r=6     l=6,f=7,r=0
+                     *
+                     *  l(left)=v*2, f(front)=v*2+1, r(right)=v*2+2
+                     */
+                    k = v*2, l = Z[k++], f = Z[k++], r = Z[k % 8];
+
+                    if (O(l, K) || O(f, K) || O(r, K)) {
+                        return stop();
+                    }
+
+                    l = O(l, B), f = O(f, B), r = O(r, B);
+
+                    // move
+                    if (l && f && r) {
+                        L(x, y, B);
+
+                        x += v < 2 ? 1 : -1; // "v < 2" eq.: "v == 0 || v == 1"
+                        y += v % 3 ? 1 : -1; // "v % 3" eq.: "v == 1 || v == 2" (0,1,2,3 % 3 => 0,1,2,0)
+
+                        L(x, y, N);
+
+                        e.x = x;
+                        e.y = y;
+
+                    /**
+                     * else change view
+                     * (. - black, # - wall, v = 0)
+                     *
+                     *  .12
+                     *  .U3
+                     *  ...
+                     *
+                     *    123
+                     *  1|000
+                     *  2|001
+                     *  3|010
+                     *  4|011
+                     *  5|100
+                     *  6|101
+                     *  7|110
+                     *  8|111
+                     *
+                     *   1    2    3    4    5    6    7    8
+                     *  ...  ...  ..#  ..#  .#.  .#.  .##  .##
+                     *  .U.  .U#  .U.  .U#  .U.  .U#  .U.  .U#
+                     *  ...  ...  ...  ...  ...  ...  ...  ...
+                     */
+
+                    // 5,6,7,8
+                    } else if (!l) {
+                        // eq.:
+                        // v++;        // 5,7 (+1) 0 -> 1, 1 -> 2, 2 -> 3, 3 -> 0
+                        // if(!r) v++; // 6,8 (+2) 0 -> 2, 1 -> 3, 2 -> 0, 3 -> 1
+                        v += 1 + !r;
+                    // 2, 4
+                    } else if (!r) {
+                        v += 3; // 0 -> 3, 1 -> 0, 2 -> 1, 3 -> 2
+                    // 3
+                    } else {
+                        v += 2; // 0 -> 2, 1 -> 3, 2 -> 0, 3 -> 1
+                    }
+                    e.v = v % 4;
+                }
+
+                // user
+                L(X, Y, "168,168,168");
+
+                R--;
+            }
+        }, 50);
+    }
+}
+
+function stop(){
+    clearInterval(T);
+    alert(":(");
+    R--;
+}
+
+/**
+ * colors equal
+ */
+function Q(
+    a, // color A = {data: [R,G,B]}
+    b  // color B = "R,G,B"
+){
+    return (a = a.data) && ""+a[0]+","+a[1]+","+a[2] == b;
+}
+
+/**
+ * color of point A is equal color B
+ */
+function O(
+    a, // point [x,y] else 0
+    b  // color [R,G,B]
+){
+    return a && _[a[0]][a[1]] == b;
+}
+
+/**
+ *  fill cell (8x8)
+ */
+function L(
+    a, // x
+    b, // y
+    c  // color
+){
+    rgb(c);
+    $.fillRect(a*S, b*S, C, C);
+    _[a][b] = c;
+}
+
+function rgb(c){
+    $.fillStyle = "rgb("+c+")";
+}
+
+function fill(){
+    var areas = [];
+    for (y = 2; y < H - 2; y++) {
+        for (x = 2; x < W - 2; x++) {
+            // background
+            if (_[x][y] == B) {
+                s = fillXY(x, y, "1,1,1"); // rgb(1,1,1) - temporary color
+                P += s;
+                areas.push([x, y, s]);
+            }
+            // track
+            if (_[x][y] == K) {
+                L(x, y, F);
+                P++;
+            }
+        }
+    }
+
+    for (i = areas.length; i--;) {
+        j = areas[i];
+        fillXY(j[0], j[1], j[2] ? F : B);
+    }
+
+    // 3344 = (width - (2+2)) * (height - (2+2)); 2 - width (height) of init border
+    if (100*P/3344 > 75) {
+        alert("Win!");
+    }
+}
+
+function fillXY(x, y, color){
+    var p, point, stack = [], replaceColor = _[x][y], s = 0;
+
+    m = 0; // bool "enemy found in area"
+
+    stack.push([x, y, 4]); // 0,1,2,3,4 - left,up,right,down,init
+
+    while (point = stack.pop()) {
+        x = point[0];
+        y = point[1];
+        j = point[2];
+        p = _[x][y];
+        e = p == N; // bool "enemy found in point"
+        if (p == replaceColor || e) {
+            L(x, y, color);
+            s++;
+
+            // eq.: if(!m && e){m=true;}  ->  m = m || e;  ->  m ||= e;  ->  m += e;
+            m += e;
+
+            // left
+            if (x/* > 0 */ && j != 2) {
+                stack.push([x - 1, y, 0]);
+            }
+            // up
+            if (y/* > 0 */ && j != 3) {
+                stack.push([x, y - 1, 1]);
+            }
+            // right
+            if (x < w && j != 0) {
+                stack.push([x + 1, y, 2]);
+            }
+            // down
+            if (y < h && j != 1) {
+                stack.push([x, y + 1, 3]);
+            }
+        }
+    }
+
+    return m ? 0 : s;
+}
+</script><body><canvas id=z width=640 height=384>
